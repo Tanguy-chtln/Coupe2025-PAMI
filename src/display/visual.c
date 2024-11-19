@@ -26,7 +26,6 @@
 #define BACKGROUND_IMG RESSOURCES_DIR "/playmat_2025_FINAL.png"
 
 
-
 inline float MINf(float a, float b) {return a < b ? a : b;};
 
 struct displayer_object_t {
@@ -60,7 +59,11 @@ struct displayer_env_t {
     unsigned int fpsRate;
 };
 
-struct displayer_env_t env = {0};
+struct displayer_env_t env;
+
+float length_to_pixels(const float x) {
+    return x *1000 ;
+}
 
 void sdl_error() {
     SDL_Log("ERROR > %s\n", SDL_GetError());
@@ -97,7 +100,7 @@ void displayer_init() {
         sdl_error();
 
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, SDL_ALPHA_OPAQUE);
-    SDL_SetWindowResizable(window, true);
+    SDL_SetWindowResizable(window, (SDL_bool) true);
 
 SDL_Surface* imageSurface = IMG_Load(BACKGROUND_IMG);
     if (!imageSurface) {
@@ -105,9 +108,8 @@ SDL_Surface* imageSurface = IMG_Load(BACKGROUND_IMG);
         exit(EXIT_FAILURE);
     }
 
-    // Convert the surface to an SDL texture
     env.backgroundTexture = SDL_CreateTextureFromSurface(renderer, imageSurface);
-    SDL_FreeSurface(imageSurface);  // Free the surface now that we have a texture
+    SDL_FreeSurface(imageSurface);
     if (!env.backgroundTexture) {
         fprintf(stderr, "Failed to load SVG as texture\n");
         exit(EXIT_FAILURE);
@@ -143,35 +145,33 @@ void displayer_quit() {
 
 
 SDL_Texture* create_rectangle_texture(SDL_Renderer* renderer, SDL_Color color, int width, int height) {
-    // Create a surface for the rectangle
+
     SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
     if (!surface) {
         SDL_Log("Failed to create surface: %s", SDL_GetError());
-        return NULL; // Return NULL on error
+        return NULL; 
     }
 
-    // Fill the surface with the specified color (rectangle)
     SDL_FillRect(surface, NULL, SDL_MapRGBA(surface->format, color.r, color.g, color.b, color.a));
 
-    // Draw the eyes on the surface
-    SDL_Color eyeColor = {255, 255, 255, 255}; // White color for eyes
-    SDL_Color pupilColor = {0, 0, 0, 255};     // Black color for pupils
-    int eyeRadius = 10;                        // Radius for the eyes
-    int pupilRadius = 5;                       // Radius for the pupils
+    SDL_Color eyeColor = {255, 255, 255, 255}; 
+    SDL_Color pupilColor = {0, 0, 0, 255};     
+    int eyeRadius = 10;                        
+    int pupilRadius = 5;                       
 
-    // Draw left eye
-    int leftEyeX = width / 4; // Position of left eye
-    int leftEyeY = height / 4; // Position of eyes
+    // Left eye
+    int leftEyeX = width / 4; 
+    int leftEyeY = height / 4; 
     for (int w = -eyeRadius; w <= eyeRadius; w++) {
         for (int h = -eyeRadius; h <= eyeRadius; h++) {
             if (w * w + h * h <= eyeRadius * eyeRadius) {
-                // Draw the eye
+                // Eye
                 int px = leftEyeX + w;
                 int py = leftEyeY + h;
                 if (px >= 0 && py >= 0 && px < width && py < height) {
                     ((Uint32*)surface->pixels)[py * surface->w + px] = SDL_MapRGBA(surface->format, eyeColor.r, eyeColor.g, eyeColor.b, eyeColor.a);
                 }
-                // Draw the pupil
+                // Pupil
                 if (w * w + h * h <= pupilRadius * pupilRadius) {
                     ((Uint32*)surface->pixels)[py * surface->w + px] = SDL_MapRGBA(surface->format, pupilColor.r, pupilColor.g, pupilColor.b, pupilColor.a);
                 }
@@ -179,18 +179,18 @@ SDL_Texture* create_rectangle_texture(SDL_Renderer* renderer, SDL_Color color, i
         }
     }
 
-    // Draw right eye
-    int rightEyeX = 3 * width / 4; // Position of right eye
+    // Right eye
+    int rightEyeX = 3 * width / 4;
     for (int w = -eyeRadius; w <= eyeRadius; w++) {
         for (int h = -eyeRadius; h <= eyeRadius; h++) {
             if (w * w + h * h <= eyeRadius * eyeRadius) {
-                // Draw the eye
+                // Eye
                 int px = rightEyeX + w;
                 int py = leftEyeY + h;
                 if (px >= 0 && py >= 0 && px < width && py < height) {
                     ((Uint32*)surface->pixels)[py * surface->w + px] = SDL_MapRGBA(surface->format, eyeColor.r, eyeColor.g, eyeColor.b, eyeColor.a);
                 }
-                // Draw the pupil
+                // Pupil
                 if (w * w + h * h <= pupilRadius * pupilRadius) {
                     ((Uint32*)surface->pixels)[py * surface->w + px] = SDL_MapRGBA(surface->format, pupilColor.r, pupilColor.g, pupilColor.b, pupilColor.a);
                 }
@@ -213,17 +213,20 @@ SDL_Texture* create_rectangle_texture(SDL_Renderer* renderer, SDL_Color color, i
 void draw_rotated_rect(SDL_Renderer *renderer, struct displayer_object_t* object) {
     // Set the destination rectangle
     SDL_Rect destRect = {
-        (int) object->rect.x * env.rescaleFactor * (1. * BACKGROUND_WIDTH / WINDOW_WIDTH),
-        (int) object->rect.y * env.rescaleFactor * (1. * BACKGROUND_HEIGHT / WINDOW_HEIGHT),
+        (int) object->rect.x * env.rescaleFactor ,
+        (int) object->rect.y * env.rescaleFactor ,
         (int) object->rect.w * env.rescaleFactor,
         (int) object->rect.h * env.rescaleFactor
     };
-
     // Render the texture with rotation
-    SDL_RenderCopyEx(renderer, object->rectTexture, NULL, &destRect, object->alpha, NULL, SDL_FLIP_NONE);
+    SDL_RenderCopyEx(renderer, object->rectTexture, NULL, &destRect, (-object->alpha + M_PI/2) * 180.f / M_PI, NULL, SDL_FLIP_NONE);
 }
 
-int displayer_add_object(double x, double y, double width, double height, double angle, struct Color_t c) {
+int displayer_add_object(double _x, double _y, double _width, double _height, double angle, struct Color_t c) {
+    const double x = length_to_pixels(_x);
+    const double y = length_to_pixels(_y);
+    const double width = length_to_pixels(_width) ;
+    const double height = length_to_pixels(_height) ;
     SDL_Color sdlColor = {(Uint8) c.r, (Uint8) c.g, (Uint8) c.b, (Uint8) c.alpha};
     struct displayer_object_t object = {{x - width / 2, y - height / 2, width, height}, angle, sdlColor, NULL};
     pthread_mutex_lock(&env.drawMtx);
@@ -231,12 +234,12 @@ int displayer_add_object(double x, double y, double width, double height, double
 
     if (env.max_num_objects == 0) {
         const unsigned int startup_obj_num = 10;
-        env.objects = calloc(startup_obj_num, sizeof(struct displayer_object_t));
+        env.objects =  (struct displayer_object_t *) calloc(startup_obj_num, sizeof(struct displayer_object_t));
         env.max_num_objects = startup_obj_num;
     } else if (env.max_num_objects <= env.num_objects){
         printf("Non sens\n");
         const int widening_multiplier = 2;
-        env.objects = realloc(env.objects, env.max_num_objects * widening_multiplier);
+        env.objects = (struct displayer_object_t *) realloc(env.objects, env.max_num_objects * widening_multiplier * sizeof(struct displayer_object_t));
         if (env.objects == NULL) {
             fprintf(stderr, "Memory allocation failed\n");
             exit(EXIT_FAILURE);
@@ -252,9 +255,12 @@ int displayer_add_object(double x, double y, double width, double height, double
     return objectId;
 }
 
-void displayer_object_update_pos(int obj, float x, float y, double angle) {
+void displayer_object_update_pos(int obj, float _x, float _y, double angle) {
     assert(obj >= 0 && (unsigned int) obj < env.num_objects);
     struct displayer_object_t *object = env.objects + obj;
+
+    const float x = length_to_pixels(_x);
+    const float y = length_to_pixels(_y);
 
     pthread_mutex_lock(&env.drawMtx);
     object->rect.x = x - object->rect.w / 2;
@@ -332,7 +338,8 @@ void *worker(void *) {
             pthread_mutex_lock(&env.drawMtx);
             for (unsigned int objectId = initializedObjects; objectId < env.num_objects; objectId++) {
                 struct displayer_object_t *object = env.objects + objectId;
-                object->rectTexture = create_rectangle_texture(env.renderer, object->color, object->rect.w, object->rect.h);
+                object->rectTexture = create_rectangle_texture(env.renderer, object->color, object->rect.w , object->rect.h);
+                initializedObjects++;
             }
             pthread_mutex_unlock(&env.drawMtx);
         }
@@ -357,6 +364,7 @@ void displayer_start(unsigned int fps) {
 
     while(!env.startup)
         usleep(1000 / 32);
+    usleep(100000);
 }
 
 void displayer_stop() {
@@ -378,19 +386,19 @@ int main() {
     displayer_start(fps);
 
     struct Color_t colors[VISUAL_DEBUG_NUM_OBJECTS] = {{100,10, 190, 255}, {20, 150, 120, 255}};
-    double pos[VISUAL_DEBUG_NUM_OBJECTS][2] = {{WINDOW_WIDTH/2, 200}, {WINDOW_WIDTH/2, 800}};
-    double alpha[VISUAL_DEBUG_NUM_OBJECTS] = {90., -90};
-    double v[VISUAL_DEBUG_NUM_OBJECTS] = {0.015, 0.015};
+    double pos[VISUAL_DEBUG_NUM_OBJECTS][2] = {{1.5, 0.5}, {1.5, 1.5}};
+    double alpha[VISUAL_DEBUG_NUM_OBJECTS] = {0, -M_PI};
+    double v[VISUAL_DEBUG_NUM_OBJECTS] = {0.000015, 0.000015};
     int objs[VISUAL_DEBUG_NUM_OBJECTS];
     for (int objectId = 0; objectId < VISUAL_DEBUG_NUM_OBJECTS; objectId++) { 
-        objs[objectId] = displayer_add_object(pos[objectId][0], pos[objectId][1], 120, 190, alpha[objectId], colors[objectId]);
+        objs[objectId] = displayer_add_object(pos[objectId][0], pos[objectId][1], 0.520, 0.190, alpha[objectId], colors[objectId]);
     }
 
     while (is_displayer_alive()) {
         for (int objectId = 0; objectId < VISUAL_DEBUG_NUM_OBJECTS; objectId++) {
-            alpha[objectId] = alpha[objectId] + .003;
-            pos[objectId][0] += v[objectId] * sin(alpha[objectId] * M_PI / 180.);
-            pos[objectId][1] -= v[objectId] * cos(alpha[objectId] * M_PI / 180.);
+            alpha[objectId] = alpha[objectId] - .0018 * M_PI / 180.;
+            pos[objectId][0] += v[objectId] * cos(alpha[objectId]);
+            pos[objectId][1] -= v[objectId] * sin(alpha[objectId]);
             displayer_object_update_pos(objs[objectId], pos[objectId][0], pos[objectId][1], alpha[objectId]);
         }
         usleep(1000 / fps);

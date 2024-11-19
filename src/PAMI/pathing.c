@@ -1,8 +1,12 @@
+#include "pathing.h"
 #include <limits.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef ENABLE_DISPLAY
+    #include "visual.h"
+#endif
 
 typedef enum { MOTIONLESS = 0, ROTATION, LINEAR, CURVED } MotionState;
 typedef enum { POSITION = 0, SPEED } AsservMode;
@@ -17,6 +21,7 @@ typedef struct {
     float accAngle;
     float distToWPoint;
     float AngularDistToWPoint;
+    bool wpChecked;
     MotionState motionState;
     AsservMode asservMode;
 } State;
@@ -43,6 +48,13 @@ typedef struct {
     unsigned int numNodes;
 } Route;
 
+struct handler_t {
+    void (*odometry_func)(float *x, float *y, float *a);
+    void (*set_speed_func)(const float linearSpeed, const float angularSpeed);
+    Route route;
+    State state;
+};
+
 #define ACC_MAX 0.03f // m/(s^2)
 #define ACC_ANGLE_MAX 1.f
 #define SPEED_LIN_MAX 0.1f // m/s
@@ -55,13 +67,13 @@ typedef struct {
 --------------------------------------------------------------------
 */
 
-inline float distance(const float x1, const float y1, const float x2, const float y2) { return sqrtf((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)); }
+float distance(const float x1, const float y1, const float x2, const float y2) { return sqrtf((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)); }
 
-inline float float_abs(const float x) { return x >= 0 ? x : -x; }
+float float_abs(const float x) { return x >= 0 ? x : -x; }
 
-inline float float_max(const float x, const float y) { return x > y ? x : y; }
+float float_max(const float x, const float y) { return x > y ? x : y; }
 
-inline float float_min(const float x, const float y) { return x > y ? y : x; }
+float float_min(const float x, const float y) { return x > y ? y : x; }
 /*
 --------------------------------------------------------------------
 --------------------------    ROUTE    -----------------------------
@@ -73,6 +85,23 @@ inline float float_min(const float x, const float y) { return x > y ? y : x; }
  * Delta d > (v1 - v0)² / (2 * ACC_MAX)
  */
 
+State State_create(const float x, const float y, const float vLin, const float accLin, const float angle, const float vAngle, const float accAngle,
+                   const float distToWPoint, const float AngularDistToWPoint, MotionState motionState, AsservMode asservMode) {
+    const State state = {.x = x,
+                         .y = y,
+                         .vLin = vLin,
+                         .accLin = accLin,
+                         .angle = angle,
+                         .vAngle = vAngle,
+                         .accAngle = accAngle,
+                         .distToWPoint = distToWPoint,
+                         .AngularDistToWPoint = AngularDistToWPoint,
+                         .motionState = motionState,
+                         .asservMode = asservMode,
+                         .wpChecked = false};
+    return state;
+}
+
 Waypoint Waypoint_create(const float x, const float y, const float vMax, const float vaMax, const float angle, MotionState motionState) {
     Waypoint wpoint = {.id = UINT_MAX, .x = x, .y = y, .vMax = vMax, .vaMax = vaMax, .alpha = angle, .motionState = motionState};
     return wpoint;
@@ -81,7 +110,7 @@ Waypoint Waypoint_create(const float x, const float y, const float vMax, const f
 void Waypoint_destruct(Waypoint *wpoint) { wpoint->id = UINT_MAX; }
 
 WaypointNode *WaypointNode_create(Waypoint wpoint) {
-    WaypointNode *wnode = malloc(sizeof(WaypointNode));
+    WaypointNode *wnode = (WaypointNode *)malloc(sizeof(WaypointNode));
     wnode->next = NULL;
     wnode->previous = NULL;
     wnode->wpoint = wpoint;
@@ -124,18 +153,23 @@ void Route_destruct(Route *route) {
 
 void Route_add(Route *route, Waypoint wpoint) {
     WaypointNode *wnode = WaypointNode_create(wpoint);
-    if ((route->start == NULL && route->stop != NULL) || (route->start != NULL && route->stop == NULL)) {
+    if ((route->start == NULL && route->stop != NULL)) {
         printf("WARNING : %s -> Route has end point but no starting point\n", __func__);
     }
+    if (route->start != NULL && route->stop == NULL) {
+        printf("WARNING : %s -> Route has a starting point but no end point\n", __func__);
+    }
+
     if (route->start == NULL) {
         route->start = wnode;
-        route->start = wnode;
+        route->stop = wnode;
         wnode->previous = NULL;
         wnode->next = NULL;
     } else {
         wnode->previous = route->stop;
         wnode->next = NULL;
         route->stop->next = wnode;
+        route->stop = wnode;
     }
     route->numNodes++;
 }
@@ -146,7 +180,8 @@ void Route_remove(Route *route, unsigned int id) {
         return;
     }
 
-    const int direction = (route->numNodes / 2) < id ? 1 : -1;
+    const int direction = (route->numNodes / 2) >= id ? 1 : -1;
+    printf("Direction : %d\n", direction);
     WaypointNode *ptr = direction == 1 ? route->start : route->stop;
     unsigned int elmtId = direction == 1 ? 0 : route->numNodes - 1;
     while (ptr != NULL && elmtId != id) {
@@ -156,41 +191,46 @@ void Route_remove(Route *route, unsigned int id) {
             ptr = ptr->previous;
         elmtId += direction;
     }
-
+    printf("%d %d %p %p\n", elmtId, id, route->start, ptr);
+    if (id == 0) {
+        route->start = route->start->next;
+    }
+    if (id == route->numNodes - 1) {
+        route->stop = route->stop->previous;
+    }
     WaypointNode_destruct(ptr);
+    route->numNodes--;
 }
 
 bool is_waypoint_checked(State state, Waypoint wpoint, const float dt) {
-    const float errorMargin = state.vLin * dt;
-    const float angleErrorMargin = state.vAngle * dt;
+    const float errorMargin = 0.0025;             // state.vLin * dt;
+    const float angleErrorMargin = M_PI / 180.f; // state.vAngle * dt;
 
+    printf("Error angle : %f \t margin : %f\n", float_abs(state.angle - wpoint.alpha), angleErrorMargin);
     if (float_abs(state.angle - wpoint.alpha) > angleErrorMargin)
         return false;
 
+    printf("Error dist : %f \t margin : %f\n", distance(wpoint.x, wpoint.y, state.x, state.y), errorMargin);
     if (distance(wpoint.x, wpoint.y, state.x, state.y) > errorMargin)
         return false;
 
     return true;
 }
 
-float route_get_next_linear_acc(State *state, Route *route) {
+float route_get_next_linear_acc(State *state, Route *route, const float dt) {
     if (route->start->next == NULL)
         return 0.f;
-
     switch (state->motionState) {
     case MOTIONLESS:
-        if (float_abs(state->vLin) > EPSILON)
-            return float_min(float_abs(state->vLin), ACC_MAX) * (state->vLin >= 0 ? 1 : -1);
-        return 0.f;
+        return float_abs(state->vLin) * (state->vLin >= 0 ? -1 : 1);
 
     case ROTATION:
-        if (float_abs(state->vLin) > EPSILON)
-            return float_min(float_abs(state->vLin), ACC_MAX) * (state->vLin >= 0 ? 1 : -1);
-        return 0.f;
+        return (float_abs(state->vLin)) * (state->vLin >= 0 ? -1 : 1);
 
     case LINEAR: {
         const Waypoint *nextWPoint = &route->start->next->wpoint;
-        const float slowDownTrigger = (state->vLin - nextWPoint->vMax) * (state->vLin - nextWPoint->vMax) / (2 * ACC_MAX);
+        const float slowDownTrigger = dt * float_abs(state->vLin - nextWPoint->vMax) * state->vLin / (ACC_MAX * 2);
+        // Delai point haut et bas :
         if (state->distToWPoint <= slowDownTrigger) {
             return float_min(float_abs(nextWPoint->vMax - state->vLin), ACC_MAX) * (nextWPoint->vMax - state->vLin >= 0 ? 1 : -1);
         }
@@ -208,20 +248,19 @@ float route_get_next_linear_acc(State *state, Route *route) {
     }
 }
 
-float route_get_next_angular_acc(State *state, Route *route) {
+float route_get_next_angular_acc(State *state, Route *route, const float dt) {
     if (route->start->next == NULL)
         return 0.f;
 
     switch (state->motionState) {
     case MOTIONLESS:
-        if (float_abs(state->vAngle) > EPSILON)
-            return float_min(float_abs(state->vAngle), ACC_ANGLE_MAX) * (state->vAngle >= 0 ? 1 : -1);
-        return 0.f;
+            return (float_abs(state->vAngle)) * (state->vAngle >= 0 ? 1 : -1);
 
     case ROTATION: {
         const Waypoint *nextWPoint = &route->start->next->wpoint;
-        const float slowDownTrigger = (state->vAngle - nextWPoint->vaMax) * (state->vAngle - nextWPoint->vaMax) / (2 * ACC_ANGLE_MAX);
-        if (state->distToWPoint <= slowDownTrigger) {
+        // const float slowDownTrigger = (state->vAngle - nextWPoint->vaMax) * (state->vAngle - nextWPoint->vaMax) / (2 * ACC_ANGLE_MAX);
+        const float slowDownTrigger = dt * float_abs(state->vAngle - nextWPoint->vaMax) * state->vAngle / (ACC_ANGLE_MAX * 2);
+        if (state->AngularDistToWPoint <= slowDownTrigger) {
             return float_min(float_abs(nextWPoint->vaMax - state->vAngle), ACC_ANGLE_MAX) * (nextWPoint->vaMax - state->vAngle >= 0 ? 1 : -1);
         }
         const Waypoint *currentWPoint = &route->start->wpoint;
@@ -229,9 +268,7 @@ float route_get_next_angular_acc(State *state, Route *route) {
     }
 
     case LINEAR:
-        if (float_abs(state->vAngle) > EPSILON)
-            return float_min(float_abs(state->vAngle), ACC_ANGLE_MAX) * (state->vAngle >= 0 ? 1 : -1);
-        return 0.f;
+            return (float_abs(state->vAngle)) * (state->vAngle >= 0 ? -1 : 1);
 
     case CURVED:
         printf("WARNING : %s -> CURVED motion state not implemented yet\n", __func__);
@@ -241,4 +278,82 @@ float route_get_next_angular_acc(State *state, Route *route) {
         printf("WARNING : %s -> Unknown motion state\n", __func__);
         return 0.f;
     }
+}
+
+void *pathing_get_handler(void (*odometry_func)(float *, float *, float *), void (*set_speed_func)(const float, const float)) {
+    struct handler_t *handler = (struct handler_t *)malloc(sizeof(struct handler_t));
+    handler->odometry_func = odometry_func;
+    handler->set_speed_func = set_speed_func;
+
+    Route route = Route_create();
+
+    Waypoint wp1 = Waypoint_create(0.1, 1.2, 0.3, 0, 0, LINEAR);
+    Waypoint wp2 = Waypoint_create(1.9, 1.2, 0, M_PI / (2 * 5), 0, ROTATION);
+    Waypoint wp3 = Waypoint_create(1.9, 1.2, 0.07, 0, M_PI / 2, LINEAR);
+    Waypoint wp4 = Waypoint_create(1.9, 0.2, 0, 0, M_PI / 2, MOTIONLESS);
+
+    Route_add(&route, wp1);
+    Route_add(&route, wp2);
+    Route_add(&route, wp3);
+    Route_add(&route, wp4);
+
+    handler->route = route;
+
+    handler->state = State_create(0.1, 1.2, 0., 0., 0, 0, 0, distance(1.9, 1.2, 0.1, 1.2), 0, LINEAR, SPEED);
+
+#ifdef ENABLE_DISPLAY
+    // Visual
+
+    unsigned int fps = 60;
+    displayer_start(fps);
+
+    struct Color_t color = {100, 10, 190, 255};
+    double pos[2] = {0., 0.};
+    double alpha = 0.;
+    displayer_add_object(pos[0], pos[1], .10, .20, alpha, color);
+#endif
+
+    return (void *)handler;
+}
+
+void pathing_destroy_handler(void *_handler) {
+    struct handler_t *handler = (struct handler_t *)_handler;
+    Route_destruct(&handler->route);
+
+    free(handler);
+}
+
+void pathing_update_speed(void *_handler, float dt) {
+    struct handler_t *handler = (struct handler_t *)_handler;
+    handler->odometry_func(&handler->state.x, &handler->state.y, &handler->state.angle);
+
+    if (is_waypoint_checked(handler->state, handler->route.start->next->wpoint, dt)) {
+        handler->state.wpChecked = false;
+        printf("Waypoint checked !\n");
+        Route_remove(&handler->route, 0);
+        if (handler->route.start != NULL)
+            handler->state.motionState = handler->route.start->wpoint.motionState;
+        else
+            handler->state.motionState = MOTIONLESS;
+    }
+    handler->state.distToWPoint = distance(handler->state.x, handler->state.y, handler->route.start->next->wpoint.x, handler->route.start->next->wpoint.y);
+    handler->state.AngularDistToWPoint = handler->route.start->next->wpoint.alpha - handler->state.angle;
+    handler->state.accLin = route_get_next_linear_acc(&handler->state, &handler->route, dt);
+    handler->state.accAngle = route_get_next_angular_acc(&handler->state, &handler->route, dt);
+    handler->state.vLin += handler->state.accLin;
+    handler->state.vAngle += handler->state.accAngle;
+
+    handler->set_speed_func(handler->state.vLin, handler->state.vAngle);
+
+    // Display
+#ifdef ENABLE_DISPLAY
+    if (!is_displayer_alive()) {
+        displayer_stop();
+        pathing_destroy_handler(_handler);
+        exit(EXIT_SUCCESS);
+    }
+    displayer_object_update_pos(0, handler->state.x, handler->state.y, handler->state.angle);
+#endif
+    printf("x : %f \t  y :%f \t a : %f \t v : %f \t va : %f\n", handler->state.x, handler->state.y, handler->state.angle, handler->state.vLin,
+           handler->state.vAngle);
 }
