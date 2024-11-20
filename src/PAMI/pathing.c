@@ -286,7 +286,7 @@ PathHandler pathing_get_handler(const Control_fcts controlFunctions) {
     Route route = Route_create();
 
     const Waypoint wp1 = Waypoint_create(0.1, 1.2, 0.6, 0, 0, LINEAR);
-    const Waypoint wp2 = Waypoint_create(1.9, 1.2, 0, M_PI / (2 ), 0, ROTATION);
+    const Waypoint wp2 = Waypoint_create(1.9, 1.2, 0, M_PI / (2), 0, ROTATION);
     const Waypoint wp3 = Waypoint_create(1.9, 1.2, 0.4, 0, M_PI / 2, LINEAR);
     const Waypoint wp4 = Waypoint_create(1.9, 0.2, 0, 0, M_PI / 2, MOTIONLESS);
 
@@ -328,13 +328,13 @@ void pathing_mode_speed(struct PathHandler_t *handler, const float dt) {
         handler->state.asservMode = POSITION;
         handler->controlFunctions.set_pos_target_func(handler->state.distToWPoint, handler->state.AngularDistToWPoint);
         printf("%f %f \n", handler->state.distToWPoint, handler->state.AngularDistToWPoint);
-        
+
     } else {
-    handler->state.accLin = route_get_next_linear_acc(&handler->state, &handler->route, dt);
-    handler->state.accAngle = route_get_next_angular_acc(&handler->state, &handler->route, dt);
-    handler->state.vLin += handler->state.accLin;
-    handler->state.vAngle += handler->state.accAngle;
-    handler->controlFunctions.set_speed_func(handler->state.vLin, handler->state.vAngle);
+        handler->state.accLin = route_get_next_linear_acc(&handler->state, &handler->route, dt);
+        handler->state.accAngle = route_get_next_angular_acc(&handler->state, &handler->route, dt);
+        handler->state.vLin += handler->state.accLin;
+        handler->state.vAngle += handler->state.accAngle;
+        handler->controlFunctions.set_speed_func(handler->state.vLin, handler->state.vAngle);
     }
 }
 
@@ -348,20 +348,22 @@ void pathing_mode_position(struct PathHandler_t *handler, const float dt) {
         else
             handler->state.motionState = MOTIONLESS;
     }
-        
 }
 
 void pathing_update_speed(const PathHandler _handler, const float dt) {
     struct PathHandler_t *handler = (struct PathHandler_t *)_handler;
-    handler->controlFunctions.odometry_func(&handler->state.x, &handler->state.y, &handler->state.angle);
+    if (handler->state.motionState != MOTIONLESS) {
+        handler->controlFunctions.odometry_func(&handler->state.x, &handler->state.y, &handler->state.angle);
 
-    handler->state.distToWPoint = distance(handler->state.x, handler->state.y, handler->route.start->next->wpoint.x, handler->route.start->next->wpoint.y);
-    handler->state.AngularDistToWPoint = handler->route.start->next->wpoint.alpha - handler->state.angle;
-    if (handler->state.asservMode == SPEED) {
-        pathing_mode_speed(handler, dt);
-    } 
-    else if (handler->state.asservMode == POSITION) {
-        pathing_mode_position(handler, dt);
+        handler->state.distToWPoint =
+            distance(handler->state.x, handler->state.y, handler->route.start->next->wpoint.x, handler->route.start->next->wpoint.y);
+        handler->state.AngularDistToWPoint = handler->route.start->next->wpoint.alpha - handler->state.angle;
+
+        if (handler->state.asservMode == SPEED) {
+            pathing_mode_speed(handler, dt);
+        } else if (handler->state.asservMode == POSITION) {
+            pathing_mode_position(handler, dt);
+        }
     }
 
     // Display
