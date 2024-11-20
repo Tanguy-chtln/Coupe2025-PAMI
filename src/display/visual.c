@@ -278,13 +278,13 @@ void displayer_display() {
         SDL_RenderClear(env.renderer);
         SDL_RenderCopy(env.renderer, env.backgroundTexture, NULL, &backgroundRect);
         SDL_SetRenderDrawColor(env.renderer, 255, 0, 0, SDL_ALPHA_OPAQUE);
-        pthread_mutex_lock(&env.drawMtx);
+        // pthread_mutex_lock(&env.drawMtx);
         for (unsigned int objectId = 0; objectId < env.num_objects; objectId++) {
             struct displayer_object_t *object = env.objects + objectId;
             draw_rotated_rect(env.renderer, object);
         }
         env.redraw = false;
-        pthread_mutex_unlock(&env.drawMtx);
+        // pthread_mutex_unlock(&env.drawMtx);
 
         SDL_RenderPresent(env.renderer);
     }

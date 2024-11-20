@@ -1,5 +1,6 @@
 #include "pami_settings.h"
 #include "pathing.h"
+#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
 
@@ -15,6 +16,7 @@
 #define UPDATE_FREQ 3000.f                       // Hz
 #define IDLE_PERIOD (1e6f / (UPDATE_FREQ * .9f)) // in microseconds
 #define PATHING_UPDATE_PERIOD 10                 // in milliseconds
+#define POSITION_MODE_SPEED 0.03f
 
 enum Side_t { LEFT = 0, RIGHT = 1 };
 
@@ -32,6 +34,7 @@ typedef struct {
     Pins pins;
     int pulValue;
     int ticksHistory;
+    int ticksWorkLoad;
     int rotationForward;
 } Motor;
 
@@ -47,12 +50,13 @@ void motor_tick(const int motorId) {
     motors[motorId].pulValue = 1 - motors[motorId].pulValue;
     motors[motorId].nextTickTime += motors[motorId].period;
     motors[motorId].ticksHistory += motors[motorId].rotationForward;
+    motors[motorId].ticksWorkLoad--;
 }
 
 void motors_tick(timer_callback_args_t __attribute((unused)) * p_args) {
     const unsigned long time = micros();
     for (int motorId = 0; motorId < NUM_MOTORS; motorId++) {
-        if (motors[motorId].nextTickTime <= time) {
+        if (motors[motorId].nextTickTime <= time && motors[motorId].ticksWorkLoad) {
             motor_tick(motorId);
         }
     }
@@ -88,6 +92,7 @@ void motors_setup() {
     motors[0].pins.ena = 0;
     motors[0].pins.pul = 0;
     motors[0].ticksHistory = 0;
+    motors[0].ticksWorkLoad = 0;
     motors[0].speed = 0.f;
 
     motors[1].side = RIGHT;
@@ -98,6 +103,7 @@ void motors_setup() {
     motors[1].pins.ena = 0;
     motors[1].pins.pul = 0;
     motors[1].ticksHistory = 0;
+    motors[1].ticksWorkLoad = 0;
     motors[1].speed = 0.f;
 
     for (int motorId = 0; motorId < NUM_MOTORS; motorId++) {
@@ -128,6 +134,13 @@ inline float angular_speed_to_linear_speed(const float angularSpeed) { return -a
 
 inline float ticks_to_linear_distance(const int ticks) { return 2 * WHEELS_RADIUS * M_PI * ((float)ticks) / WHEELS_TICKS_PER_REVOLUTION; }
 
+inline int linear_distance_to_ticks(const float linearDistance) {
+    return (int)(linearDistance * WHEELS_TICKS_PER_REVOLUTION / (2 * WHEELS_RADIUS * M_PI));
+}
+
+inline int angular_delta_to_ticks(const float angleDelta) { return (int)ceil( angleDelta * WHEELS_SPACING * WHEELS_TICKS_PER_REVOLUTION / (2 * M_PI * WHEELS_RADIUS)
+); }
+
 void motor_set_speed(const float speed, const Side_t side) {
     const int motorId = side == LEFT ? 0 : 1;
     bool isClockwise;
@@ -156,7 +169,8 @@ void motor_set_speed(const float speed, const Side_t side) {
         motors[motorId].period = 1e6f * speed_to_period(fabs(speed));
         motors[motorId].rotationForward = 1;
     }
-    motors[motorId].nextTickTime = micros() + motors[motorId].period;
+    motors[motorId].ticksWorkLoad = INT_MAX;
+    //motors[motorId].nextTickTime = micros() + motors[motorId].period;
 }
 
 void pami_set_speed(const float linearSpeed, const float angularSpeed) {
@@ -172,6 +186,49 @@ void pami_set_speed(const float linearSpeed, const float angularSpeed) {
         motors[0].speed = leftSpeed;
         motors[1].speed = rightSpeed;
     }
+}
+
+void pami_set_target_position(const float deltaPos, const float deltaAngle) {
+    if (fabs(deltaPos) < fabs(deltaAngle)) {
+
+        const int angularLinearizedTicks = (deltaAngle <= 1e-5f) && (deltaAngle >= -1e-5f) ? 0 : angular_delta_to_ticks(fabs(deltaAngle));
+
+        const int leftTicksWorkLoad = angularLinearizedTicks;
+        const int rightTicksWorkLoad = angularLinearizedTicks;
+        const float leftSpeed = POSITION_MODE_SPEED * (deltaAngle >= 0 ? -1 : 1);
+        const float rightSpeed = -leftSpeed;
+
+        noInterrupts();
+        motor_set_speed(leftSpeed, LEFT);
+        motor_set_speed(rightSpeed, RIGHT);
+        motors[0].ticksWorkLoad = leftTicksWorkLoad;
+        motors[1].ticksWorkLoad = rightTicksWorkLoad;
+        interrupts();
+        printf("Called with deltaPos, deltaAngle : %f %f\nSetting target position at ticks : %d %d\t, speed : %f %f\n", deltaPos, deltaAngle, leftTicksWorkLoad, rightTicksWorkLoad, leftSpeed, rightSpeed);
+        printf("------------------%d\n", angular_delta_to_ticks(fabs(deltaAngle)));
+    } else {
+        const int linearTicksWorkLoad = (deltaPos <= 1e-5f) && (deltaPos >= -1e-5f) ? 0 : linear_distance_to_ticks(fabs(deltaPos));
+
+        const int leftTicksWorkLoad = linearTicksWorkLoad;
+        const int rightTicksWorkLoad = linearTicksWorkLoad;
+        const float leftSpeed = POSITION_MODE_SPEED * (deltaPos >= 0 ? 1 : -1);
+        const float rightSpeed = leftSpeed;
+
+        noInterrupts();
+        motor_set_speed(leftSpeed, LEFT);
+        motor_set_speed(rightSpeed, RIGHT);
+        motors[0].ticksWorkLoad = leftTicksWorkLoad;
+        motors[1].ticksWorkLoad = rightTicksWorkLoad;
+        interrupts();
+        printf("Called with deltaPos, deltaAngle : %f %f\nSetting target position at ticks : %d %d\t, speed : %f %f", deltaPos, deltaAngle, leftTicksWorkLoad, rightTicksWorkLoad, leftSpeed, rightSpeed);
+    }
+}
+
+bool pami_is_position_target_reached() {
+    printf("%d %d\n", motors[0].ticksWorkLoad, motors[1].ticksWorkLoad);
+    if (motors[0].ticksWorkLoad != 0 || motors[1].ticksWorkLoad != 0)
+        return false;
+    return true;
 }
 
 void pami_get_displacement(float *x, float *y, float *angle) {
@@ -218,11 +275,15 @@ bool read_line() {
     return is_end_of_line(incoming_Byte) or text.length() == MAX_LENGTH;
 }
 
-void *pathingHandler = nullptr;
+PathHandler pathingHandler = nullptr;
 void setup() {
 
     Serial.begin(19200);
-    pathingHandler = pathing_get_handler(pami_get_displacement, pami_set_speed);
+    Control_fcts controlFunctions = {.odometry_func = pami_get_displacement,
+                                     .set_speed_func = pami_set_speed,
+                                     .set_pos_target_func = pami_set_target_position,
+                                     .pami_is_position_target_reached = pami_is_position_target_reached};
+    pathingHandler = pathing_get_handler(controlFunctions);
     motors_setup();
     if (!begin_timer(UPDATE_FREQ)) {
         Serial.println("Failed to init timer and interruption for filter.");

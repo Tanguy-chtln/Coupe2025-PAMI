@@ -15,5 +15,6 @@ apt install libsdl2-image-dev libsdl2-dev
 cmake -S . -B build -DENABLE_DISPLAY_DEBUGGER=ON
 cmake --build build
 ./build/pami # Main binary
+./build/pami_display # Main binary with visualizer
 ./build/visual_debugger # Displayer debugger
 ```

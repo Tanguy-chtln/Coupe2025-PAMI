@@ -3,14 +3,22 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include <stdbool.h>
 
-void some_c_function();
+typedef struct PathHandler_t *PathHandler;
 
-void *pathing_get_handler(void (*odometry_func)(float *, float *, float *), void (*set_speed_func)(const float, const float));
+typedef struct {
+    void (*odometry_func)(float *, float *, float *);
+    void (*set_speed_func)(const float, const float);
+    void (*set_pos_target_func)(const float, const float);
+    bool (*pami_is_position_target_reached)();
+} Control_fcts;
 
-void pathing_destroy_handler(void *handler);
+PathHandler pathing_get_handler(const Control_fcts ctrl_fcts);
 
-void pathing_update_speed(void *handler, float dt);
+void pathing_destroy_handler(const PathHandler handler);
+
+void pathing_update_speed(const PathHandler handler, const float dt);
 
 #ifdef __cplusplus
 }
