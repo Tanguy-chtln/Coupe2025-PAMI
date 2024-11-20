@@ -140,42 +140,53 @@ class Serial_t {
     static bool available() { return true; }
 };
 
-void fixedFrequencyTask(double frequency, GPTimerCbk_f task) {
-    using namespace std::chrono;
-    auto interval = duration<double>(1.0 / frequency);
-    auto next_time = steady_clock::now() + interval;
-
-    std::mutex mtx;
-    std::condition_variable cv;
-
-    while (true) {
-        task(nullptr);
-
-        std::unique_lock<std::mutex> lock(mtx);
-        cv.wait_until(lock, next_time, [] { return false; });
-        next_time += interval;
-    }
-}
-
-void launch_callback(GPTimerCbk_f callback, double frequency) {
-    std::thread([=]() { fixedFrequencyTask(frequency, callback); }).detach();
-}
-
 class FspTimer {
+  private:
+    bool isRunning;
+    bool isClosed;
+
+    void fixedFrequencyTask(double frequency, GPTimerCbk_f task) {
+        using namespace std::chrono;
+        auto interval = duration<double>(1.0 / frequency);
+        auto next_time = steady_clock::now() + interval;
+
+        std::mutex mtx;
+        std::condition_variable cv;
+        while (!isClosed) {
+            while (isRunning) {
+                task(nullptr);
+
+                std::unique_lock<std::mutex> lock(mtx);
+                cv.wait_until(lock, next_time, [] { return false; });
+                next_time += interval;
+            }
+        }
+    }
+
+    void launch_callback(GPTimerCbk_f callback, double frequency) {
+        std::thread([=]() { fixedFrequencyTask(frequency, callback); }).detach();
+    }
+
   public:
     static int8_t get_available_timer(int8_t &, bool = false) { return 0; }
 
     static void force_use_of_pwm_reserved_timer() {}
 
-    static bool begin(timer_mode_t, uint8_t, uint8_t, float freq_hz, float, GPTimerCbk_f cbk = nullptr, void * = nullptr) {
+    static void release_pwm_reserved_timer(){}
+
+    bool begin(timer_mode_t, uint8_t, uint8_t, float freq_hz, float, GPTimerCbk_f cbk = nullptr, void * = nullptr) {
         if (cbk) {
+            isRunning = true;
+            isClosed = false;
             launch_callback(cbk, freq_hz);
         }
         return true;
     }
 
-    static bool begin(timer_mode_t, uint8_t, uint8_t, uint32_t period, uint32_t, timer_source_div_t, GPTimerCbk_f cbk = nullptr, void * = nullptr) {
+    bool begin(timer_mode_t, uint8_t, uint8_t, uint32_t period, uint32_t, timer_source_div_t, GPTimerCbk_f cbk = nullptr, void * = nullptr) {
         if (cbk) {
+            isRunning = true;
+            isClosed = false;
             launch_callback(cbk, 1 / period);
         }
         return true;
@@ -186,6 +197,15 @@ class FspTimer {
     bool open() { return true; }
 
     bool start() { return true; }
+
+    bool stop() {
+        isRunning = false;
+        return true;
+    }
+    bool close() {
+        isClosed = false;
+        return true;
+    }
 };
 
 void interrupts() { genMtx.lock(); }

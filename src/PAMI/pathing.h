@@ -12,6 +12,7 @@ typedef struct {
     void (*set_speed_func)(const float, const float);
     void (*set_pos_target_func)(const float, const float);
     bool (*pami_is_position_target_reached)();
+    void (*pami_shutdown)();
 } Control_fcts;
 
 PathHandler pathing_get_handler(const Control_fcts ctrl_fcts);

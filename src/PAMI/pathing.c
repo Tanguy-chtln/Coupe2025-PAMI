@@ -138,12 +138,14 @@ void Route_destruct(Route *route) {
     WaypointNode *ptr = route->start;
     WaypointNode *ptrNext = route->start->next;
     unsigned int numNodes = route->numNodes;
-    while (ptr != NULL) {
+    while (ptrNext != NULL) {
         WaypointNode_destruct(ptr);
         route->numNodes--;
         ptr = ptrNext;
         ptrNext = ptrNext->next;
     }
+    WaypointNode_destruct(ptr);
+    route->numNodes--;
     if (route->numNodes != 0)
         printf("WARNING : %s -> Exepected to destroy %d nodes but destroyed %d "
                "nodes\n",
@@ -202,7 +204,7 @@ void Route_remove(Route *route, unsigned int id) {
 }
 
 bool is_waypoint_checked(State state, Waypoint wpoint, const float dt) {
-    const float errorMargin = 0.0025;            // state.vLin * dt;
+    const float errorMargin = 0.02;            // state.vLin * dt;
     const float angleErrorMargin = M_PI / 180.f; // state.vAngle * dt;
 
     printf("Error angle : %f \t margin : %f\n", float_abs(state.angle - wpoint.alpha), angleErrorMargin);
@@ -369,6 +371,7 @@ void pathing_update_speed(const PathHandler _handler, const float dt) {
     // Display
 #ifdef ENABLE_DISPLAY
     if (!is_displayer_alive()) {
+        handler->controlFunctions.pami_shutdown();
         displayer_stop();
         pathing_destroy_handler(_handler);
         exit(EXIT_SUCCESS);

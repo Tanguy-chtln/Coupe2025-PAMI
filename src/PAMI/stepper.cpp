@@ -82,6 +82,24 @@ bool begin_timer(const float rate) {
     return true;
 }
 
+bool shutdown_timer() {
+    // Stop the timer
+    if (!motorTimers.stop()) {
+        return false; // Return false if stopping fails
+    }
+    
+    // Close the timer
+    if (!motorTimers.close()) {
+        return false; // Return false if closing fails
+    }
+    
+    // Optionally, release any resources allocated for the timer
+    FspTimer::release_pwm_reserved_timer();
+
+    return true; // Return true to indicate a successful shutdown
+}
+
+
 void motors_setup() {
 
     motors[0].side = LEFT;
@@ -138,8 +156,9 @@ inline int linear_distance_to_ticks(const float linearDistance) {
     return (int)(linearDistance * WHEELS_TICKS_PER_REVOLUTION / (2 * WHEELS_RADIUS * M_PI));
 }
 
-inline int angular_delta_to_ticks(const float angleDelta) { return (int)ceil( angleDelta * WHEELS_SPACING * WHEELS_TICKS_PER_REVOLUTION / (2 * M_PI * WHEELS_RADIUS)
-); }
+inline int angular_delta_to_ticks(const float angleDelta) {
+    return (int)ceil(angleDelta * WHEELS_SPACING * WHEELS_TICKS_PER_REVOLUTION / (2 * M_PI * WHEELS_RADIUS));
+}
 
 void motor_set_speed(const float speed, const Side_t side) {
     const int motorId = side == LEFT ? 0 : 1;
@@ -170,7 +189,7 @@ void motor_set_speed(const float speed, const Side_t side) {
         motors[motorId].rotationForward = 1;
     }
     motors[motorId].ticksWorkLoad = INT_MAX;
-    //motors[motorId].nextTickTime = micros() + motors[motorId].period;
+    // motors[motorId].nextTickTime = micros() + motors[motorId].period;
 }
 
 void pami_set_speed(const float linearSpeed, const float angularSpeed) {
@@ -204,7 +223,8 @@ void pami_set_target_position(const float deltaPos, const float deltaAngle) {
         motors[0].ticksWorkLoad = leftTicksWorkLoad;
         motors[1].ticksWorkLoad = rightTicksWorkLoad;
         interrupts();
-        printf("Called with deltaPos, deltaAngle : %f %f\nSetting target position at ticks : %d %d\t, speed : %f %f\n", deltaPos, deltaAngle, leftTicksWorkLoad, rightTicksWorkLoad, leftSpeed, rightSpeed);
+        printf("Called with deltaPos, deltaAngle : %f %f\nSetting target position at ticks : %d %d\t, speed : %f %f\n", deltaPos, deltaAngle,
+               leftTicksWorkLoad, rightTicksWorkLoad, leftSpeed, rightSpeed);
         printf("------------------%d\n", angular_delta_to_ticks(fabs(deltaAngle)));
     } else {
         const int linearTicksWorkLoad = (deltaPos <= 1e-5f) && (deltaPos >= -1e-5f) ? 0 : linear_distance_to_ticks(fabs(deltaPos));
@@ -220,7 +240,8 @@ void pami_set_target_position(const float deltaPos, const float deltaAngle) {
         motors[0].ticksWorkLoad = leftTicksWorkLoad;
         motors[1].ticksWorkLoad = rightTicksWorkLoad;
         interrupts();
-        printf("Called with deltaPos, deltaAngle : %f %f\nSetting target position at ticks : %d %d\t, speed : %f %f", deltaPos, deltaAngle, leftTicksWorkLoad, rightTicksWorkLoad, leftSpeed, rightSpeed);
+        printf("Called with deltaPos, deltaAngle : %f %f\nSetting target position at ticks : %d %d\t, speed : %f %f", deltaPos, deltaAngle,
+               leftTicksWorkLoad, rightTicksWorkLoad, leftSpeed, rightSpeed);
     }
 }
 
@@ -275,6 +296,12 @@ bool read_line() {
     return is_end_of_line(incoming_Byte) or text.length() == MAX_LENGTH;
 }
 
+unsigned long loopTime = 0;
+void pami_shutdown() {
+    shutdown_timer();
+    loopTime = ULONG_MAX;
+}
+
 PathHandler pathingHandler = nullptr;
 void setup() {
 
@@ -282,21 +309,22 @@ void setup() {
     Control_fcts controlFunctions = {.odometry_func = pami_get_displacement,
                                      .set_speed_func = pami_set_speed,
                                      .set_pos_target_func = pami_set_target_position,
-                                     .pami_is_position_target_reached = pami_is_position_target_reached};
+                                     .pami_is_position_target_reached = pami_is_position_target_reached,
+                                     .pami_shutdown = pami_shutdown};
     pathingHandler = pathing_get_handler(controlFunctions);
     motors_setup();
+
     if (!begin_timer(UPDATE_FREQ)) {
         Serial.println("Failed to init timer and interruption for filter.");
     }
 }
 
-unsigned long loopTime = 0;
+
 void loop() {
     // read_line();
     // Serial.println(text);
     const unsigned long time = millis();
     if (loopTime < time) {
-
         pathing_update_speed(pathingHandler, PATHING_UPDATE_PERIOD / 1000.f);
         loopTime += PATHING_UPDATE_PERIOD;
     }
