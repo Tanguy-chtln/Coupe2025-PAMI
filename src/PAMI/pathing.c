@@ -54,7 +54,7 @@ struct PathHandler_t {
     State state;
 };
 
-#define ACC_MAX 0.003f // m/(s^2)
+#define ACC_MAX 0.005f // m/(s^2)
 #define ACC_ANGLE_MAX 0.1f
 #define SPEED_LIN_MAX 0.1f // m/s
 #define SPEED_DELTA_TRIGGER 0.005f
@@ -230,7 +230,7 @@ float route_get_next_linear_acc(State *state, Route *route, const float dt) {
 
     case LINEAR: {
         const Waypoint *nextWPoint = &route->start->next->wpoint;
-        const float slowDownTrigger = dt * float_abs(state->vLin - nextWPoint->vMax) * state->vLin / (ACC_MAX * 2);
+        const float slowDownTrigger =  dt * float_abs(state->vLin - nextWPoint->vMax) * state->vLin / (ACC_MAX * 2);
         // Delai point haut et bas :
         if (state->distToWPoint <= slowDownTrigger) {
             return float_min(float_abs(nextWPoint->vMax - state->vLin), ACC_MAX) * (nextWPoint->vMax - state->vLin >= 0 ? 1 : -1);
@@ -287,10 +287,10 @@ PathHandler pathing_get_handler(const Control_fcts controlFunctions) {
 
     Route route = Route_create();
 
-    const Waypoint wp1 = Waypoint_create(0.1, 1.2, 0.6, 0, 0, LINEAR);
-    const Waypoint wp2 = Waypoint_create(1.9, 1.2, 0, M_PI / (2), 0, ROTATION);
-    const Waypoint wp3 = Waypoint_create(1.9, 1.2, 0.4, 0, M_PI / 2, LINEAR);
-    const Waypoint wp4 = Waypoint_create(1.9, 0.2, 0, 0, M_PI / 2, MOTIONLESS);
+    const Waypoint wp1 = Waypoint_create(0.1, 1.2, 10., 0, 0, LINEAR);
+    const Waypoint wp2 = Waypoint_create(2.6, 1.2, 0, M_PI / (2), 0, ROTATION);
+    const Waypoint wp3 = Waypoint_create(2.6, 1.2, 0.4, 0, M_PI / 2, LINEAR);
+    const Waypoint wp4 = Waypoint_create(2.6, 0.2, 0, 0, M_PI / 2, MOTIONLESS);
 
     Route_add(&route, wp1);
     Route_add(&route, wp2);
