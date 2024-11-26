@@ -13,7 +13,7 @@ include(FindPkgConfig)
 
 add_executable(${PROJECT_NAME} ${PAMI_DIR}/stepper.cpp ${PAMI_DIR}/pathing.c)
 target_link_libraries(${PROJECT_NAME} PRIVATE m)
-target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Ofast -march=native)
+target_compile_options(${PROJECT_NAME} PRIVATE -g -Wall -Wextra -Ofast -march=native)
 add_compile_definitions(RESSOURCES_DIR="${RESSOURCES_DIR}")
 
 if (ENABLE_DISPLAY_DEBUGGER)
