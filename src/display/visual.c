@@ -13,21 +13,22 @@
 
 #include "visual.h"
 
-#define WINDOW_WIDTH 1500
-#define WINDOW_HEIGHT 1000
-#define BACKGROUND_WIDTH 3000
-#define BACKGROUND_HEIGHT 2000
-#define FPS_DISPLAY_FREQ 0.5
+#define WINDOW_WIDTH 1500 // pixels 
+#define WINDOW_HEIGHT 1000 // pixels 
+#define BACKGROUND_WIDTH 3000 // mm 
+#define BACKGROUND_HEIGHT 2000 // mm 
+#define FPS_DISPLAY_FREQ 0.5 // Frequency at which frame rate display is updated (screen title)
 
 #ifndef RESSOURCES_DIR
     #define RESSOURCES_DIR "ressources"
 #endif
 
-#define BACKGROUND_IMG RESSOURCES_DIR "/playmat_2025_FINAL.png"
+#define BACKGROUND_IMG RESSOURCES_DIR "/playmat_2025_FINAL.png" // Background image 
 
 
 inline float MINf(float a, float b) {return a < b ? a : b;};
 
+// Struct for objects textures informations
 struct displayer_object_t {
     SDL_FRect rect;
     double alpha;
@@ -35,7 +36,7 @@ struct displayer_object_t {
     SDL_Texture* rectTexture;
 };
 
-
+// Renderer informations 
 struct displayer_env_t {
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -61,6 +62,7 @@ struct displayer_env_t {
 
 struct displayer_env_t env;
 
+// Converts meters to pixels 
 float length_to_pixels(const float x) {
     return x *1000 ;
 }
@@ -71,7 +73,7 @@ void sdl_error() {
 }
 
 
-
+// Initialize displayer 
 void displayer_init() {
     SDL_Window *window = NULL;
     SDL_Renderer *renderer = NULL;
@@ -128,6 +130,7 @@ SDL_Surface* imageSurface = IMG_Load(BACKGROUND_IMG);
     env.rescaleFactor = MINf(1.f * WINDOW_WIDTH / BACKGROUND_WIDTH, 1.f * WINDOW_HEIGHT / BACKGROUND_HEIGHT);
 }
 
+// Destroy displayer 
 void displayer_quit() {
     for (unsigned int i = 0; i < env.num_objects; i++) {
         SDL_DestroyTexture(env.objects[i].rectTexture);
@@ -143,7 +146,7 @@ void displayer_quit() {
 }
 
 
-
+// Create a robot-shaped texture 
 SDL_Texture* create_rectangle_texture(SDL_Renderer* renderer, SDL_Color color, int width, int height) {
 
     SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
@@ -209,7 +212,7 @@ SDL_Texture* create_rectangle_texture(SDL_Renderer* renderer, SDL_Color color, i
 }
 
 
-
+// Draw a rotated texture 
 void draw_rotated_rect(SDL_Renderer *renderer, struct displayer_object_t* object) {
     // Set the destination rectangle
     SDL_Rect destRect = {
@@ -222,6 +225,7 @@ void draw_rotated_rect(SDL_Renderer *renderer, struct displayer_object_t* object
     SDL_RenderCopyEx(renderer, object->rectTexture, NULL, &destRect, (-object->alpha + M_PI/2) * 180.f / M_PI, NULL, SDL_FLIP_NONE);
 }
 
+// Adds  new object to be displayed 
 int displayer_add_object(double _x, double _y, double _width, double _height, double angle, struct Color_t c) {
     const double x = length_to_pixels(_x);
     const double y = length_to_pixels(_y);
@@ -255,6 +259,7 @@ int displayer_add_object(double _x, double _y, double _width, double _height, do
     return objectId;
 }
 
+// Update the position of a declared object
 void displayer_object_update_pos(int obj, float _x, float _y, double angle) {
     assert(obj >= 0 && (unsigned int) obj < env.num_objects);
     struct displayer_object_t *object = env.objects + obj;
@@ -270,7 +275,7 @@ void displayer_object_update_pos(int obj, float _x, float _y, double angle) {
     pthread_mutex_unlock(&env.drawMtx);
 }
 
-
+// Update screen
 void displayer_display() {
     if (env.redraw) {
         SDL_Rect backgroundRect = {0, 0, BACKGROUND_WIDTH * env.rescaleFactor, BACKGROUND_HEIGHT * env.rescaleFactor}; 
@@ -306,7 +311,7 @@ void displayer_display() {
     }
 }
 
-
+// Start display thread
 void *worker(void *) {
     displayer_init();
     Uint32 startTime, endTime, ellapsedTime;
@@ -318,11 +323,11 @@ void *worker(void *) {
 
     while (env.isRunning) {
         startTime = SDL_GetTicks();
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT)
+        while (SDL_PollEvent(&event)) { // User actions
+            if (event.type == SDL_QUIT) 
                 env.isRunning = false;
             if (event.type == SDL_KEYDOWN) {
-                if (event.key.keysym.sym == SDLK_ESCAPE)  
+                if (event.key.keysym.sym == SDLK_ESCAPE)  // Escaoe us pressed
                     env.isRunning = false;
             }
             if (event.type == SDL_WINDOWEVENT) {
@@ -343,7 +348,7 @@ void *worker(void *) {
             }
             pthread_mutex_unlock(&env.drawMtx);
         }
-        displayer_display();
+        displayer_display(); // Update screen
 
         endTime = SDL_GetTicks();
         ellapsedTime = endTime - startTime;
@@ -355,7 +360,7 @@ void *worker(void *) {
     return NULL;
 }
 
-
+// Startup the displayer
 void displayer_start(unsigned int fps) {
     env.startup = false;
     env.fpsRate = fps;
@@ -367,12 +372,14 @@ void displayer_start(unsigned int fps) {
     usleep(100000);
 }
 
+// Stops the displayer
 void displayer_stop() {
     env.isRunning = false;
     pthread_join(env.worker, NULL);
     pthread_mutex_destroy(&env.drawMtx);
 }
 
+// Returns weither the displayer has been stopped 
 int is_displayer_alive() {
     return env.isRunning;
 }
@@ -385,26 +392,27 @@ int main() {
     unsigned int fps = 60;
     displayer_start(fps);
 
-    struct Color_t colors[VISUAL_DEBUG_NUM_OBJECTS] = {{100,10, 190, 255}, {20, 150, 120, 255}};
-    double pos[VISUAL_DEBUG_NUM_OBJECTS][2] = {{1.5, 0.5}, {1.5, 1.5}};
-    double alpha[VISUAL_DEBUG_NUM_OBJECTS] = {0, -M_PI};
-    double v[VISUAL_DEBUG_NUM_OBJECTS] = {0.000015, 0.000015};
-    int objs[VISUAL_DEBUG_NUM_OBJECTS];
+    struct Color_t colors[VISUAL_DEBUG_NUM_OBJECTS] = {{100,10, 190, 255}, {20, 150, 120, 255}}; // Colors of each objects (R,G,B)
+    double pos[VISUAL_DEBUG_NUM_OBJECTS][2] = {{1.5, 0.5}, {1.5, 1.5}}; // Position of each objects, in meters, from the upper left corner
+    double alpha[VISUAL_DEBUG_NUM_OBJECTS] = {0, -M_PI}; // Angle of each object in radians
+    double v[VISUAL_DEBUG_NUM_OBJECTS] = {0.000015, 0.000015}; // Speed of each object in m/s
+    int objs[VISUAL_DEBUG_NUM_OBJECTS]; // Objects containers
     for (int objectId = 0; objectId < VISUAL_DEBUG_NUM_OBJECTS; objectId++) { 
-        objs[objectId] = displayer_add_object(pos[objectId][0], pos[objectId][1], 0.520, 0.190, alpha[objectId], colors[objectId]);
+        objs[objectId] = displayer_add_object(pos[objectId][0], pos[objectId][1], 0.520, 0.190, alpha[objectId], colors[objectId]); // Declare objects 
+    // 0.52 and 0.19 are the objects dimensions in meters
     }
 
-    while (is_displayer_alive()) {
-        for (int objectId = 0; objectId < VISUAL_DEBUG_NUM_OBJECTS; objectId++) {
-            alpha[objectId] = alpha[objectId] - .0018 * M_PI / 180.;
-            pos[objectId][0] += v[objectId] * cos(alpha[objectId]);
-            pos[objectId][1] -= v[objectId] * sin(alpha[objectId]);
-            displayer_object_update_pos(objs[objectId], pos[objectId][0], pos[objectId][1], alpha[objectId]);
+    while (is_displayer_alive()) { // While the user has not killed the window, continue to update the objects position 
+        for (int objectId = 0; objectId < VISUAL_DEBUG_NUM_OBJECTS; objectId++) { 
+            alpha[objectId] = alpha[objectId] - .0018 * M_PI / 180.; // Calculate new angle 
+            pos[objectId][0] += v[objectId] * cos(alpha[objectId]); // Calculate new X position 
+            pos[objectId][1] -= v[objectId] * sin(alpha[objectId]); // Calclulate new Y position 
+            displayer_object_update_pos(objs[objectId], pos[objectId][0], pos[objectId][1], alpha[objectId]); // Update objects' position stored in the displayer 
         }
-        usleep(1000 / fps);
+        usleep(1000 / fps); // Wait a little (different from the FPS of the displayer itself)
     }
 
-    displayer_stop();
+    displayer_stop(); // Kill the displayer
 }
 
 #endif // VISUAL_DEBUG
