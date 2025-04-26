@@ -48,6 +48,7 @@ static struct displayer_env_t {
     SDL_Renderer *renderer;
     Uint32 lastDisplayTime;
     Uint32 fpsDisplayCountdown;
+    Uint32 lastRedrawTime;
     int fpsAcc;
     int fpsAccNum;
     float windowWidth;
@@ -127,6 +128,7 @@ SDL_Surface* imageSurface = IMG_Load(BACKGROUND_IMG);
     env.window = window;
     env.renderer = renderer;
     env.lastDisplayTime = SDL_GetTicks();
+    env.lastRedrawTime = SDL_GetTicks();
     env.fpsDisplayCountdown = 1000. / FPS_DISPLAY_FREQ;
     env.fpsAccNum = 0;
     env.fpsAcc = 0;
@@ -362,7 +364,7 @@ void displayer_update_target(int obj, float _x, float _y) {
 
 // Update screen
 static void displayer_display() {
-    if (env.redraw) {
+    if (env.redraw || (env.lastRedrawTime - SDL_GetTicks() > 200)) {
         SDL_Rect backgroundRect = {0, 0, (int)(BACKGROUND_WIDTH * env.rescaleFactor), (int)(BACKGROUND_HEIGHT * env.rescaleFactor)}; 
         SDL_SetRenderDrawColor(env.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
         SDL_RenderClear(env.renderer);
@@ -377,6 +379,7 @@ static void displayer_display() {
               displayer_draw_target(env.renderer, object);
         }
         env.redraw = false;
+        env.lastRedrawTime = SDL_GetTicks();
         // pthread_mutex_unlock(&env.drawMtx);
 
         SDL_RenderPresent(env.renderer);
