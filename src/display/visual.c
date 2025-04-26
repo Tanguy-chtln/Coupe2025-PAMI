@@ -26,7 +26,12 @@
 #define BACKGROUND_IMG RESSOURCES_DIR "/playmat_2025_FINAL.png" // Background image 
 
 
-inline float MINf(float a, float b) {return a < b ? a : b;};
+static inline float MINf(float a, float b) {return a < b ? a : b;};
+
+typedef enum {
+  ROBOT,
+  TARGET
+} obj_type_t;
 
 // Struct for objects textures informations
 struct displayer_object_t {
@@ -34,10 +39,11 @@ struct displayer_object_t {
     double alpha;
     SDL_Color color;
     SDL_Texture* rectTexture;
+    obj_type_t objType;
 };
 
 // Renderer informations 
-struct displayer_env_t {
+static struct displayer_env_t {
     SDL_Window *window;
     SDL_Renderer *renderer;
     Uint32 lastDisplayTime;
@@ -58,23 +64,23 @@ struct displayer_env_t {
     pthread_mutex_t drawMtx;
     pthread_t worker;
     unsigned int fpsRate;
-};
 
-struct displayer_env_t env;
+    void (*goto_callback)(double posX, double posY);
+} env;
 
 // Converts meters to pixels 
-float length_to_pixels(const float x) {
+static float length_to_pixels(const float x) {
     return x *1000 ;
 }
 
-void sdl_error() {
+static void sdl_error() {
     SDL_Log("ERROR > %s\n", SDL_GetError());
     exit(EXIT_FAILURE);
 }
 
 
 // Initialize displayer 
-void displayer_init() {
+static void displayer_init() {
     SDL_Window *window = NULL;
     SDL_Renderer *renderer = NULL;
 
@@ -128,10 +134,12 @@ SDL_Surface* imageSurface = IMG_Load(BACKGROUND_IMG);
     env.windowWidth = WINDOW_WIDTH;
     env.windowHeight = WINDOW_HEIGHT;
     env.rescaleFactor = MINf(1.f * WINDOW_WIDTH / BACKGROUND_WIDTH, 1.f * WINDOW_HEIGHT / BACKGROUND_HEIGHT);
+    env.goto_callback = NULL;
+    env.redraw = true;
 }
 
 // Destroy displayer 
-void displayer_quit() {
+static void displayer_quit() {
     for (unsigned int i = 0; i < env.num_objects; i++) {
         SDL_DestroyTexture(env.objects[i].rectTexture);
     }
@@ -147,7 +155,7 @@ void displayer_quit() {
 
 
 // Create a robot-shaped texture 
-SDL_Texture* create_rectangle_texture(SDL_Renderer* renderer, SDL_Color color, int width, int height) {
+static SDL_Texture* create_rectangle_texture(SDL_Renderer* renderer, SDL_Color color, int width, int height) {
 
     SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA32);
     if (!surface) {
@@ -211,28 +219,56 @@ SDL_Texture* create_rectangle_texture(SDL_Renderer* renderer, SDL_Color color, i
     return texture;
 }
 
+// Creates a circle texture
+SDL_Texture* create_circle_texture(SDL_Renderer* renderer, int radius, SDL_Color color) {
+    int diameter = radius * 2;
+
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, diameter, diameter, 32, SDL_PIXELFORMAT_RGBA32);
+    if (!surface) {
+        SDL_Log("Failed to create surface: %s", SDL_GetError());
+        return NULL;
+    }
+
+    SDL_FillRect(surface, NULL, SDL_MapRGBA(surface->format, 0, 0, 0, 0));
+    SDL_LockSurface(surface);
+    Uint32* pixels = (Uint32*)surface->pixels;
+    Uint32 pixelColor = SDL_MapRGBA(surface->format, color.r, color.g, color.b, color.a);
+
+    for (int y = 0; y < diameter; ++y) {
+        for (int x = 0; x < diameter; ++x) {
+            int dx = x - radius;
+            int dy = y - radius;
+            if (dx*dx + dy*dy <= radius*radius) {
+                pixels[y * surface->w + x] = pixelColor;
+            }
+        }
+    }
+
+    SDL_UnlockSurface(surface);
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_FreeSurface(surface);
+
+    if (!texture) {
+        SDL_Log("Failed to create texture: %s", SDL_GetError());
+    }
+
+    return texture;
+}
 
 // Draw a rotated texture 
-void draw_rotated_rect(SDL_Renderer *renderer, struct displayer_object_t* object) {
+static void draw_rotated_rect(SDL_Renderer *renderer, struct displayer_object_t* object) {
     // Set the destination rectangle
     SDL_Rect destRect = {
-        (int) object->rect.x * env.rescaleFactor ,
-        (int) object->rect.y * env.rescaleFactor ,
-        (int) object->rect.w * env.rescaleFactor,
-        (int) object->rect.h * env.rescaleFactor
+        (int) (object->rect.x * env.rescaleFactor) ,
+        (int) (object->rect.y * env.rescaleFactor) ,
+        (int) (object->rect.w * env.rescaleFactor),
+        (int) (object->rect.h * env.rescaleFactor)
     };
     // Render the texture with rotation
     SDL_RenderCopyEx(renderer, object->rectTexture, NULL, &destRect, (-object->alpha + M_PI/2) * 180.f / M_PI, NULL, SDL_FLIP_NONE);
 }
 
-// Adds  new object to be displayed 
-int displayer_add_object(double _x, double _y, double _width, double _height, double angle, struct Color_t c) {
-    const double x = length_to_pixels(_x);
-    const double y = length_to_pixels(_y);
-    const double width = length_to_pixels(_width) ;
-    const double height = length_to_pixels(_height) ;
-    SDL_Color sdlColor = {(Uint8) c.r, (Uint8) c.g, (Uint8) c.b, (Uint8) c.alpha};
-    struct displayer_object_t object = {{x - width / 2, y - height / 2, width, height}, angle, sdlColor, NULL};
+static int displayer_add_object_all_type(struct displayer_object_t object) {
     pthread_mutex_lock(&env.drawMtx);
     const int objectId = env.num_objects;
 
@@ -259,10 +295,44 @@ int displayer_add_object(double _x, double _y, double _width, double _height, do
     return objectId;
 }
 
+// Adds  new object to be displayed 
+int displayer_add_object(double _x, double _y, double _width, double _height, double angle, struct Color_t c) {
+    const double x = length_to_pixels(_x);
+    const double y = length_to_pixels(_y);
+    const double width = length_to_pixels(_width) ;
+    const double height = length_to_pixels(_height) ;
+    SDL_Color sdlColor = {(Uint8) c.r, (Uint8) c.g, (Uint8) c.b, (Uint8) c.alpha};
+    struct displayer_object_t object = {{(float)(x - width / 2), (float)(y - height / 2), (float)width, (float)height}, angle, sdlColor, NULL, ROBOT};
+    return displayer_add_object_all_type(object);
+}
+
+static void displayer_draw_target(SDL_Renderer *renderer, struct displayer_object_t *targetObj) {
+    SDL_Texture *circleTexture = targetObj->rectTexture;
+   if (!circleTexture) return;
+    SDL_Rect destRect = {
+        (int) (targetObj->rect.x * env.rescaleFactor) ,
+        (int) (targetObj->rect.y * env.rescaleFactor) ,
+        (int) (targetObj->rect.w * env.rescaleFactor),
+        (int) (targetObj->rect.h * env.rescaleFactor)
+    };
+
+    SDL_RenderCopy(renderer, circleTexture, NULL, &destRect);
+}
+
+int displayer_add_target(double _x, double _y, double _radius, struct Color_t c) {
+    const double x = length_to_pixels(_x);
+    const double y = length_to_pixels(_y);
+    const double r = length_to_pixels(_radius);
+    SDL_Color sdlColor = {(Uint8) c.r, (Uint8) c.g, (Uint8) c.b, (Uint8) c.alpha};
+    struct displayer_object_t object = {{(float)(x - r / 2), (float)(y - r / 2), (float)r*2, (float)r*2}, 0, sdlColor, NULL, TARGET};
+    return displayer_add_object_all_type(object);
+}
+
 // Update the position of a declared object
 void displayer_object_update_pos(int obj, float _x, float _y, double angle) {
     assert(obj >= 0 && (unsigned int) obj < env.num_objects);
     struct displayer_object_t *object = env.objects + obj;
+    assert(object->objType == ROBOT);
 
     const float x = length_to_pixels(_x);
     const float y = length_to_pixels(_y);
@@ -275,10 +345,25 @@ void displayer_object_update_pos(int obj, float _x, float _y, double angle) {
     pthread_mutex_unlock(&env.drawMtx);
 }
 
+void displayer_update_target(int obj, float _x, float _y) {
+    assert(obj >= 0 && (unsigned int) obj < env.num_objects);
+    struct displayer_object_t *object = env.objects + obj;
+    assert(object->objType == TARGET);
+
+    const float x = length_to_pixels(_x);
+    const float y = length_to_pixels(_y);
+
+    pthread_mutex_lock(&env.drawMtx);
+    object->rect.x = x - object->rect.w / 2;
+    object->rect.y = y - object->rect.h / 2;
+    env.redraw = true;
+    pthread_mutex_unlock(&env.drawMtx);
+}
+
 // Update screen
-void displayer_display() {
+static void displayer_display() {
     if (env.redraw) {
-        SDL_Rect backgroundRect = {0, 0, BACKGROUND_WIDTH * env.rescaleFactor, BACKGROUND_HEIGHT * env.rescaleFactor}; 
+        SDL_Rect backgroundRect = {0, 0, (int)(BACKGROUND_WIDTH * env.rescaleFactor), (int)(BACKGROUND_HEIGHT * env.rescaleFactor)}; 
         SDL_SetRenderDrawColor(env.renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
         SDL_RenderClear(env.renderer);
         SDL_RenderCopy(env.renderer, env.backgroundTexture, NULL, &backgroundRect);
@@ -286,7 +371,10 @@ void displayer_display() {
         // pthread_mutex_lock(&env.drawMtx);
         for (unsigned int objectId = 0; objectId < env.num_objects; objectId++) {
             struct displayer_object_t *object = env.objects + objectId;
-            draw_rotated_rect(env.renderer, object);
+            if (object->objType == ROBOT)
+              draw_rotated_rect(env.renderer, object);
+            else if (object->objType == TARGET)
+              displayer_draw_target(env.renderer, object);
         }
         env.redraw = false;
         // pthread_mutex_unlock(&env.drawMtx);
@@ -312,7 +400,7 @@ void displayer_display() {
 }
 
 // Start display thread
-void *worker(void *) {
+static void *worker(void *) {
     displayer_init();
     Uint32 startTime, endTime, ellapsedTime;
 
@@ -337,13 +425,24 @@ void *worker(void *) {
                     env.rescaleFactor = MINf(env.windowWidth / BACKGROUND_WIDTH, env.windowHeight / BACKGROUND_HEIGHT);
                 }
             }
+            if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+                const int x = event.button.x;
+                const int y = event.button.y;
+                const double posX = x / (env.rescaleFactor * 1000);
+                const double posY = y / (env.rescaleFactor*1000);
+                if (env.goto_callback)
+                  env.goto_callback(posX, posY);
+            }
 
         }
         if (initializedObjects < env.num_objects) {
             pthread_mutex_lock(&env.drawMtx);
             for (unsigned int objectId = initializedObjects; objectId < env.num_objects; objectId++) {
                 struct displayer_object_t *object = env.objects + objectId;
-                object->rectTexture = create_rectangle_texture(env.renderer, object->color, object->rect.w , object->rect.h);
+                if (object->objType == ROBOT)
+                  object->rectTexture = create_rectangle_texture(env.renderer, object->color, object->rect.w , object->rect.h);
+                else if (object->objType == TARGET)
+                  object->rectTexture = create_circle_texture(env.renderer, object->rect.w/2, object->color);
                 initializedObjects++;
             }
             pthread_mutex_unlock(&env.drawMtx);
@@ -358,6 +457,10 @@ void *worker(void *) {
 
     displayer_quit();
     return NULL;
+}
+
+void register_goto_callback(void (*callback)(double posX, double posY)) {
+    env.goto_callback = callback;
 }
 
 // Startup the displayer
@@ -388,9 +491,14 @@ int is_displayer_alive() {
 
 #define VISUAL_DEBUG_NUM_OBJECTS 2
 
+void debug_goto_callback(double x, double y) {
+  printf("%lf %lf\n", x, y);
+}
+
 int main() {
     unsigned int fps = 60;
     displayer_start(fps);
+    register_goto_callback(&debug_goto_callback);
 
     struct Color_t colors[VISUAL_DEBUG_NUM_OBJECTS] = {{100,10, 190, 255}, {20, 150, 120, 255}}; // Colors of each objects (R,G,B)
     double pos[VISUAL_DEBUG_NUM_OBJECTS][2] = {{1.5, 0.5}, {1.5, 1.5}}; // Position of each objects, in meters, from the upper left corner
